@@ -11,7 +11,7 @@ from mxnet.gluon import data as gdata, loss as gloss, nn
 # 初始化函数，设定基准等等
 def initialize(context):
     # 设定500ETF作为基准
-    set_benchmark('600105.XSHG')
+    set_benchmark('510500.XSHG')
     # 开启动态复权模式(真实价格)
     set_option('use_real_price', True)
     # 输出内容到日志 log.info()
@@ -35,19 +35,28 @@ def initialize(context):
     run_daily(pl_trade, time='every_bar',reference_security='000300.XSHG')
     # 收盘后运行
     run_daily(pl_after_market_close, time='after_close', reference_security='000300.XSHG')
+    
+def pl_calc_position(context,pl_code):
+    '''
+    计算仓位。
+
+    全仓买入
+    '''
+    return context.portfolio.available_cash / 2 # <------------ 更改头寸大小
 
 #参数放置函数
 def getPara():# <---------------------这里更改参数
     tempList = []
-    for i in [100]: # 迭代次数
-        for j in [0.03,0.07]: # 学习率
-            tempList.append([i,j])
+    for i in [10]: # 迭代次数
+        for j in [0.01]: # 学习率
+            for k in [64]: # 隐藏层
+                tempList.append([i,j,k])
     return tempList
         
 # 初始化全局变量
 def pl_init_global(context):
     # 股票池，500ETF
-    g.pl_stock_pool = ['600105.XSHG'] # <---------------------------------在此处增加股票池内股票
+    g.pl_stock_pool = ['600000.XSHG','600004.XSHG'] # <---------------------------------在此处增加股票池内股票
     g.model = {}
 
 ## 开盘前运行函数
@@ -143,13 +152,7 @@ def pl_sell(context):
     return
 
 
-def pl_calc_position(context,pl_code):
-    '''
-    计算仓位。
 
-    全仓买入
-    '''
-    return context.portfolio.available_cash
 
 
 def pl_is_high_limit(pl_code):
@@ -189,15 +192,17 @@ def pl_is_low_limit(pl_code):
     return False
     
 # 数据获得&预处理函数   
-def getData(name,dataSize): 
+def getData(name): 
     # 接取参数
     day = 20 # 要预测的天数
     base = 20 # 月线
-    getSize = dataSize # 获取的数据大小
+    realGetSize = 2640 # 获取的数据大小
+    getSize = 2400 # 获取的数据大小 - 要跑的大小
     interval = 10 # 每隔interval天采样一次
     preInter = 1 # 预测时是预测preInter天行情
     # 获得信息
-    Data = attribute_history(security=name, count=getSize, unit='1d',fields=['close'],skip_paused=True, df=True, fq='pre')['close'] 
+    Data = attribute_history(security=name, count=realGetSize, unit='1d',fields=['close'],skip_paused=True, df=True, fq='pre')['close'] 
+    Data = Data[:2400]
     # 标准化
     mean = pd.Series(Data).rolling(window=base).mean() # 计算月线
     Data = (Data - mean) / mean * 10000 #　标准化
@@ -218,8 +223,9 @@ def getData(name,dataSize):
 def train(trainX,trainY,para):
     # 一些参数
     epoch = para[0]
-    batchSize = 10
     lr = para[1]
+    layer = para[2]
+    batchSize = 10
     newTrainX = [[],[],[],[],[]]
     newTrainY = [[],[],[],[],[]]
     # 切割为k = 5份
@@ -244,7 +250,7 @@ def train(trainX,trainY,para):
                     trainY = nd.concat(nd.array(trainY),nd.array(newTrainY[j]),dim = 0)
         #训练
         net = nn.Sequential() 
-        net.add(nn.Dense(64, activation='sigmoid'),nn.Dropout(0.2),nn.Dense(2)) 
+        net.add(nn.Dense(layer, activation='sigmoid'),nn.Dropout(0.2),nn.Dense(2)) 
         net.initialize(init.Normal(sigma=0.01)) # 初始化原始参数
         train_iter = gdata.DataLoader(gdata.ArrayDataset(trainX, trainY), batchSize, shuffle=True) 
         loss = gloss.SoftmaxCrossEntropyLoss() #交叉熵函数
@@ -271,12 +277,12 @@ def getModel():
         tempList = []
         for para in parameter:
             # 信息预处理
-            trainX, trainY = getData(name,2000) # 获得&预处理函数
+            trainX, trainY = getData(name) # 获得&预处理函数
             # 训练&得到分数
             tempModel, tempScore = train(trainX,trainY,para) # 训练函数
             tempList.append([tempModel,tempScore])
         # 选取最高分&回传
         pdTempList = pd.DataFrame(tempList)
         print(pdTempList)
-        pdTempList.sort_values(by = 1)
+        pdTempList.sort_values(by = 1,ascending = False)
         g.model[name] = pdTempList[0][0]
